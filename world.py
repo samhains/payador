@@ -632,10 +632,8 @@ class World:
     if parsed_location_change_split:
       target_name = parsed_location_change_split[0]
     else:
-      # Fallback: unbracketed name after the colon
-      m = re.search(r"Your location changed:\s*([^#\n]+)", line)
-      if m:
-        target_name = m.group(1).strip().strip(',').strip()
+      # Fallback: the line itself is the name (unbracketed)
+      target_name = line.strip().strip(',').strip().strip('<>').strip()
     if not target_name:
       return
     try:

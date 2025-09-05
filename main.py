@@ -301,9 +301,14 @@ if context_mode:
         # Apply agent/system prompt and starting_scenario
         agent_system_prompt = setup.get("system_prompt")
         if isinstance(agent_system_prompt, str) and agent_system_prompt.strip():
-            # If auto agent exists later we'll reinit with this; store for now
-            cfg.setdefault("player_agent", {}) if isinstance(cfg, dict) else None
+            try:
+                if 'player_agent' in globals() and player_agent:
+                    player_agent.system_prompt = agent_system_prompt.strip()
+            except Exception:
+                pass
         starting_scenario = setup.get("starting_scenario") or starting_scenario
+        if isinstance(starting_scenario, list):
+            starting_scenario = " ".join([str(x) for x in starting_scenario])
         # Apply player persona
         if isinstance(setup.get("player"), dict):
             p = setup["player"]
@@ -314,11 +319,111 @@ if context_mode:
             except Exception:
                 pass
         # Apply world updates (STRICT bullets)
-        wu = setup.get("world_updates") or ""
-        # Pre-extract created locations and whether a move was issued
+        wu_obj = setup.get("world_updates")
+        if wu_obj is None:
+            wu = ""
+        elif isinstance(wu_obj, str):
+            wu = wu_obj
+        elif isinstance(wu_obj, list):
+            try:
+                wu = "\n".join([str(x) for x in wu_obj])
+            except Exception:
+                wu = "\n".join([str(x) for x in wu_obj if isinstance(x, (str, int, float))])
+        else:
+            # Last resort: stringify the object
+            wu = str(wu_obj)
+        # Normalize common alternative labels (Location created, Connection established, Item created, NPC introduced)
+        def _normalize_context_world_updates(text: str) -> str:
+            strict_lines = []
+            new_locations = []
+            connections = []
+            new_items = []
+            new_characters = []
+            observed_pairs = []
+            location_change_target = None
+
+            m = re.search(r"-\s*Your location changed:\s*([^\n#]+)", text)
+            if m:
+                location_change_target = m.group(1).strip().strip('"').strip()
+
+            # Locations
+            for mm in re.finditer(r"-\s*(?:New location|Location created):\s*([^\n;]+)(?:;\s*(.*))?", text):
+                name = mm.group(1).strip()
+                desc = (mm.group(2) or "").strip()
+                if not desc:
+                    desc = "A newly created place."
+                new_locations.append((name, desc))
+
+            # Connections
+            for mm in re.finditer(r"-\s*(?:Connect locations|Connection established):\s*([^\n;]+)", text):
+                pair_text = mm.group(1)
+                for seg in re.split(r",", pair_text):
+                    seg = seg.strip()
+                    pm = re.search(r"(.+?)\s*<->\s*(.+)", seg)
+                    if pm:
+                        a = pm.group(1).strip().strip('<>').strip()
+                        b = pm.group(2).strip().strip('<>').strip()
+                        connections.append((a, b))
+
+            # Items
+            for mm in re.finditer(r"-\s*(?:New item|Item created):\s*([^\n;(]+)(?:\([^)]*\))?\s*;\s*(.*)", text):
+                name = mm.group(1).strip()
+                desc = mm.group(2).strip()
+                loc = 'Inventory' if re.search(r"on your person|strapped|held", desc, flags=re.I) else (location_change_target or 'Inventory')
+                new_items.append((name, desc, loc))
+
+            # Characters
+            for mm in re.finditer(r"-\s*(?:New character|NPC introduced):\s*([^\n;(]+)(?:\([^)]*\))?\s*;\s*(.*)", text):
+                name = mm.group(1).strip()
+                desc = mm.group(2).strip()
+                loc = location_change_target or None
+                new_characters.append((name, desc, loc))
+
+            # Observed paths
+            obs = re.search(r"-\s*Observed paths:\s*(.+)", text)
+            if obs:
+                blob = obs.group(1).strip()
+                parts = re.split(r"\s*(?:\d+\)\s*|;\s*)", blob)
+                parts = [p.strip().strip('.') for p in parts if p.strip()]
+                idx = 1
+                for p in parts:
+                    # Name: first 4 words, unless a colon split suggests a name
+                    if ':' in p[:60]:
+                        nm, ds = p.split(':', 1)
+                        n = nm.strip()
+                        d = ds.strip()
+                    else:
+                        words = re.split(r"\s+", p)
+                        n = " ".join(words[:4])
+                        d = p
+                    observed_pairs.append((n, d))
+                    idx += 1
+
+            # Build strict bullets
+            if new_locations:
+                parts = [f"<{n}> description: \"{d}\"" for n, d in new_locations]
+                strict_lines.append("- New location: " + ", ".join(parts))
+            if new_characters:
+                parts = [f"<{n}> description: \"{d}\" location: <{(location_change_target or 'Inventory') if (l is None) else l}>" for n, d, l in new_characters]
+                strict_lines.append("- New character: " + ", ".join(parts))
+            if new_items:
+                parts = [f"<{n}> description: \"{d}\" location: <{loc}>" for n, d, loc in new_items]
+                strict_lines.append("- New item: " + ", ".join(parts))
+            if connections:
+                parts = [f"<{a}> <-> <{b}>" for a, b in connections]
+                strict_lines.append("- Connect locations: " + ", ".join(parts))
+            if observed_pairs:
+                parts = [f"<{n}> description: \"{d}\"" for n, d in observed_pairs[:2]]
+                strict_lines.append("- Observed paths: " + ", ".join(parts))
+            if location_change_target:
+                strict_lines.append(f"- Your location changed: <{location_change_target}>")
+            return "\n".join(strict_lines)
+
+        wu_strict = _normalize_context_world_updates(wu)
+        # Pre-extract created locations and whether a move was issued from normalized text
         created_locations: list[str] = []
         try:
-            new_loc_blocks = re.findall(r"-\s*New location:\s*(.+)", wu)
+            new_loc_blocks = re.findall(r"-\s*New location:\s*(.+)", wu_strict, flags=re.S)
             for block in new_loc_blocks:
                 names = re.findall(r"<([^<>]+)>\s*description:\s*\"", block)
                 if not names:
@@ -326,19 +431,32 @@ if context_mode:
                 created_locations.extend([n.strip() for n in names if n])
         except Exception:
             pass
-        had_location_change = bool(re.search(r"-\s*Your location changed:\s*<([^<>]+)>|Your location changed:\s*([^#\n]+)", wu))
+        had_location_change = bool(re.search(r"-\s*Your location changed:\s*<([^<>]+)>", wu_strict))
         print("\n🛠️ Bootstrap from context 🛠️")
-        print(wu)
+        print(wu_strict)
         # Avoid auto-connecting placeholder and allow teleport during bootstrap
         _old_auto = getattr(world, 'auto_connect_on_move', False)
         _old_tp = getattr(world, 'allow_teleport_on_location_change', False)
         try:
             world.auto_connect_on_move = False
             world.allow_teleport_on_location_change = True
-            world.parse_updates(wu)
+            world.parse_updates(wu_strict)
         finally:
             world.auto_connect_on_move = _old_auto
             world.allow_teleport_on_location_change = _old_tp
+        # If still at placeholder, force relocation to a created location
+        try:
+            if world.player.location and world.player.location.name == cfg.get("placeholder_name", "Starting Point"):
+                for name in created_locations:
+                    if name in world.locations:
+                        world.player.location = world.locations[name]
+                        try:
+                            world.visited.add(name)
+                        except Exception:
+                            pass
+                        break
+        except Exception:
+            pass
         if bool(cfg.get("prune_placeholder_after_bootstrap", True)):
             _prune_placeholder_location(
                 world,
