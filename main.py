@@ -57,10 +57,37 @@ if cfg_path and os.path.exists(cfg_path):
         print(f"Warning: Could not load config '{cfg_path}': {e}")
         cfg = {}
 
-def _prune_placeholder_location(world, *, placeholder_name: str = "Starting Point") -> None:
+def _prune_placeholder_location(
+    world,
+    *,
+    placeholder_name: str = "Starting Point",
+    fallback_locations: list[str] | None = None,
+    force: bool = False,
+) -> None:
     try:
         sp = world.locations.get(placeholder_name)
-        if not sp or world.player.location is sp:
+        if not sp:
+            return
+        # If the player is still at the placeholder, optionally relocate first
+        if world.player.location is sp and force:
+            target = None
+            # Prefer provided fallbacks in order
+            for name in (fallback_locations or []):
+                if name in world.locations and world.locations[name] is not sp:
+                    target = world.locations[name]
+                    break
+            # Otherwise pick any other known location
+            if target is None:
+                for loc in world.locations.values():
+                    if loc is not sp:
+                        target = loc
+                        break
+            if target is not None:
+                world.player.location = target
+            else:
+                # No alternative: keep placeholder for now
+                return
+        if world.player.location is sp:
             return
         # Move any NPCs off the placeholder to the player's current location
         for ch in list(world.characters.values()):
@@ -288,6 +315,18 @@ if context_mode:
                 pass
         # Apply world updates (STRICT bullets)
         wu = setup.get("world_updates") or ""
+        # Pre-extract created locations and whether a move was issued
+        created_locations: list[str] = []
+        try:
+            new_loc_blocks = re.findall(r"-\s*New location:\s*(.+)", wu)
+            for block in new_loc_blocks:
+                names = re.findall(r"<([^<>]+)>\s*description:\s*\"", block)
+                if not names:
+                    names = re.findall(r"([^,<][^,]*?)\s*description:\s*\"", block)
+                created_locations.extend([n.strip() for n in names if n])
+        except Exception:
+            pass
+        had_location_change = bool(re.search(r"-\s*Your location changed:\s*<([^<>]+)>|Your location changed:\s*([^#\n]+)", wu))
         print("\n🛠️ Bootstrap from context 🛠️")
         print(wu)
         # Avoid auto-connecting placeholder and allow teleport during bootstrap
@@ -301,7 +340,12 @@ if context_mode:
             world.auto_connect_on_move = _old_auto
             world.allow_teleport_on_location_change = _old_tp
         if bool(cfg.get("prune_placeholder_after_bootstrap", True)):
-            _prune_placeholder_location(world, placeholder_name=cfg.get("placeholder_name", "Starting Point"))
+            _prune_placeholder_location(
+                world,
+                placeholder_name=cfg.get("placeholder_name", "Starting Point"),
+                fallback_locations=created_locations,
+                force=not had_location_change,
+            )
         try:
             world.visited.add(world.player.location.name)
         except Exception:
@@ -383,7 +427,12 @@ elif exploratory_mode and starting_scenario and bootstrap_on_start and not state
             pass
         # Remove the placeholder location now that we have a real starting area
         if bool(cfg.get("prune_placeholder_after_bootstrap", True)):
-            _prune_placeholder_location(world, placeholder_name=cfg.get("placeholder_name", "Starting Point"))
+            _prune_placeholder_location(
+                world,
+                placeholder_name=cfg.get("placeholder_name", "Starting Point"),
+                fallback_locations=created_locations,
+                force=not had_location_change,
+            )
         # Apply full player config after bootstrap (location/inventory allowed)
         _apply_player_config(world, player_cfg, apply_location=True, apply_inventory=True)
     except Exception as e:
