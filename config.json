@@ -1,13 +1,21 @@
 {
-  // Enable exploratory world-building prompt and parsing
+  // Start from a blank slate or an example: "blank", "1", or "2"
+  "world": "blank",
+
+  // Single-file world bible used to derive system prompt, player persona, starting scenario, and initial world
+  "context_path": "context.txt",
+
+  // Enable exploratory world-building so the world can grow via structured updates
   "explore": true,
 
-  // Optional opening seed used in the first turns
-  "starting_scenario": "You arrive at sunset, within a jon rafman/cronenberg inspired environment.",
+  // Enable the autonomous player-agent by default (or pass --auto)
+  "auto": true,
 
-  // If this file exists, the app loads it at startup; it will autosave after each turn
+  // Save/load evolving world state across runs
   "world_state_path": "world_state.json",
-
-  // Set to true to save automatically after each turn (defaults to true when world_state_path is set)
-  "autosave": true
+  "autosave": true,
+  // Avoid loading saved state when starting from blank (fresh context-based bootstrap)
+  "skip_load_on_blank": true,
+  // Run bootstrap step on start when using blank + context
+  "bootstrap_on_start": true
 }
