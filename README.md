@@ -40,11 +40,29 @@ and then activate the environment
 conda activate payador
 ```
 
-### Gemini API key
+### Environment variables (.env)
 
-The default implementation uses the Gemini API as the main Large Language Model, so make sure you put [your API key](https://ai.google.dev/) in a file called `API_key`.
+Create a `.env` file in the project root (or export variables in your shell). The code auto-loads `.env` without extra dependencies.
 
-...or you can use any other model by modifying `models.py`! 
+Minimal examples:
+
+```
+# Choose provider: gemini (default) or openrouter
+LLM_PROVIDER=gemini
+
+# Gemini setup
+GOOGLE_API_KEY=your_gemini_api_key
+# Optional: pick a specific model
+GEMINI_MODEL=gemini-2.5-pro
+
+# OpenRouter setup (optional alternative)
+# OPENROUTER_API_KEY=your_openrouter_api_key
+# OPENROUTER_MODEL=google/gemini-2.5-pro
+```
+
+Notes:
+- `GOOGLE_API_KEY` is preferred for Gemini; `GEMINI_API_KEY` is also supported.
+- If you set `LLM_PROVIDER=openrouter`, the app will use OpenRouter instead.
 
 ### Run!
 

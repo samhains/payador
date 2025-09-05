@@ -10,15 +10,20 @@ import re
 import sys
 
 import example_worlds
-from models import GeminiModel
+import os
+from models import GeminiModel, OpenRouterModel
 from prompts import prompt_narrate_current_scene, prompt_world_update
 
 # Instantiate the world
 world_id = sys.argv[1] if len(sys.argv) > 1 else "1"
 world = example_worlds.get_world(world_id)
 
-# Initialize the model and disable the safety settings
-model = GeminiModel("API_key")
+# Initialize the model using environment variables (.env supported)
+provider = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
+if provider == "openrouter":
+    model = OpenRouterModel()
+else:
+    model = GeminiModel()
 
 # Welcome the user
 print ("""
@@ -72,4 +77,3 @@ while(True):
 
     # Parse the response and update the world
     world.parse_updates(response_update)
-
