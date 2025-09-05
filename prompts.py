@@ -60,3 +60,54 @@ def prompt_world_update (world_state: str, input: str) -> str:
     """
 
     return prompt
+
+
+def prompt_world_update_exploratory(
+    world_state: str,
+    input: str,
+    *,
+    source_material: str | None = None,
+    starting_scenario: str | None = None,
+) -> str:
+    """Exploratory world-building prompt.
+
+    Encourages the model to invent (hallucinate) new components as needed and
+    output strictly structured updates so we can parse and persist them.
+    """
+
+    context = ""
+    if source_material:
+        context += f"\nBACKGROUND MATERIAL (you may expand creatively):\n{source_material}\n"
+    if starting_scenario:
+        context += f"\nSTARTING SCENARIO (seed):\n{starting_scenario}\n"
+
+    prompt = f"""You are a creative world-builder and storyteller managing a fictional world.
+    You must keep internal consistency with the current state but are encouraged to invent new elements
+    to make the world richer and to enable the player's actions.
+
+    Current world state:
+    {world_state}
+    {context}
+
+    Player input: "{input}"
+
+    Produce updates in the STRICT format below. Use None when not applicable.
+    Be concise and avoid moving the story forward beyond these state changes.
+
+    - New item: <Name> description: "Short description" location: <Inventory|Location|Character>
+    - New character: <Name> description: "Short description" location: <Location>
+    - New location: <Name> description: "Short description"
+    - Connect locations: <A> <-> <B>, <C> <-> <D>
+    - Moved object: <object> now is in <new_location>
+    - Blocked passages now available: <now_reachable_location>
+    - Your location changed: <new_location>
+
+    Notes:
+    - You may output multiple items/locations/characters in the same bullet, separated by commas.
+    - Only use angle-bracket tokens <...> for component names; keep descriptions in quotes.
+    - If you invented a new location and the player moves there, be sure to add it via "New location" first.
+
+    Finally, add a single short narration sentence using the format: #<your sentence>#
+    """
+
+    return prompt

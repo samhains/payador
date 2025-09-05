@@ -244,9 +244,121 @@ class World:
       - a location is now reachable
       - the position of the player changed.
     """
+    # First handle any world-building operations so subsequent moves can reference them
+    try:
+      self.parse_new_locations(updates)
+      self.parse_new_characters(updates)
+      self.parse_new_items(updates)
+      self.parse_connect_locations(updates)
+    except Exception as e:
+      print(e)
+
+    # Then apply movement/connectivity changes
     self.parse_moved_objects(updates)
     self.parse_blocked_passages(updates)
     self.parse_location_change(updates)
+
+  # ===== World-building extensions =====
+  def _ensure_location(self, name: str, description: str | None = None) -> 'Location':
+    if name in self.locations:
+      return self.locations[name]
+    descs = [description] if description else ["An unspecified location created during play."]
+    loc = Location(name, descs)
+    self.add_location(loc)
+    return loc
+
+  def _ensure_character(self, name: str, description: str | None, location_name: str) -> 'Character':
+    if name in self.characters:
+      return self.characters[name]
+    loc = self._ensure_location(location_name)
+    descs = [description] if description else ["A character created during play."]
+    ch = Character(name, descs, location=loc)
+    self.add_character(ch)
+    return ch
+
+  def _ensure_item(self, name: str, description: str | None) -> 'Item':
+    if name in self.items:
+      return self.items[name]
+    descs = [description] if description else ["An object created during play."]
+    it = Item(name, descs)
+    self.add_item(it)
+    return it
+
+  def parse_new_locations(self, updates: str) -> None:
+    matches = re.findall(r"-\s*New location:\s*(.+)", updates)
+    if not matches:
+      return
+    # Allow comma-separated entries on the same line
+    entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"", matches[0])
+    for name, desc in entries:
+      try:
+        self._ensure_location(name.strip(), desc.strip())
+      except Exception as e:
+        print(e)
+
+  def parse_new_characters(self, updates: str) -> None:
+    matches = re.findall(r"-\s*New character:\s*(.+)", updates)
+    if not matches:
+      return
+    entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"\s*location:\s*<([^<>]+)>", matches[0])
+    for name, desc, loc in entries:
+      try:
+        self._ensure_character(name.strip(), desc.strip(), loc.strip())
+      except Exception as e:
+        print(e)
+
+  def parse_new_items(self, updates: str) -> None:
+    matches = re.findall(r"-\s*New item:\s*(.+)", updates)
+    if not matches:
+      return
+    entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"\s*location:\s*<([^<>]+)>", matches[0])
+    for name, desc, dst in entries:
+      try:
+        item = self._ensure_item(name.strip(), desc.strip())
+        dst = dst.strip()
+        # Place item
+        if dst == 'Inventory':
+          try:
+            self.player.save_item(item, self.player.location)
+          except Exception:
+            # If already in inventory, ignore
+            pass
+        elif dst in self.locations:
+          loc = self.locations[dst]
+          if item not in loc.items:
+            loc.items.append(item)
+        elif dst in self.characters:
+          ch = self.characters[dst]
+          if item not in ch.inventory:
+            ch.inventory.append(item)
+        else:
+          # Create location and place there
+          loc = self._ensure_location(dst)
+          if item not in loc.items:
+            loc.items.append(item)
+      except Exception as e:
+        print(e)
+
+  def parse_connect_locations(self, updates: str) -> None:
+    matches = re.findall(r"-\s*Connect locations:\s*(.+)", updates)
+    if not matches:
+      return
+    # Extract ordered sequence of <...> tokens; connect pairs bidirectionally
+    tokens = re.findall(r"<([^<>]+)>", matches[0])
+    if len(tokens) < 2:
+      return
+    def connect(a: 'Location', b: 'Location'):
+      if b not in a.connecting_locations:
+        a.connecting_locations.append(b)
+      if a not in b.connecting_locations:
+        b.connecting_locations.append(a)
+    # Iterate in pairs: (0,1), (2,3), ...
+    for i in range(0, len(tokens) - 1, 2):
+      a_name = tokens[i].strip()
+      b_name = tokens[i + 1].strip()
+      a = self._ensure_location(a_name)
+      b = self._ensure_location(b_name)
+      connect(a, b)
 
   def parse_moved_objects (self, updates: str) -> None:
     """Parse the output of the language model to update the position of objects.
@@ -297,4 +409,3 @@ class World:
         self.player.move(self.locations[parsed_location_change_split[0]])
       except Exception as e:
         print(e)
-

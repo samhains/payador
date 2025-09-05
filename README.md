@@ -72,6 +72,20 @@ Finally, just run `main.py`.
 python main.py
 ```
 
+### Exploratory world-building mode (optional)
+
+Enable a mode where the model can invent new locations, items, and characters and persist them to the world state via structured updates:
+
+```
+export EXPLORATORY_MODE=1
+# Optional: provide background text and a starting scenario
+echo "A dusty spaceport on the desert planet Aridia..." > source_material.txt
+export STARTING_SCENARIO="You arrive at sunset, heat shimmering on the landing pads."
+python main.py
+```
+
+In this mode, the model outputs extra world-building bullets (e.g., "New item", "New location", "New character", "Connect locations"). The engine parses these and extends the world so later turns can reference the newly created elements.
+
 ## 📄 Paper
 
 ICCC'24 Proceedings: [Here!](https://computationalcreativity.net/iccc24/papers/ICCC24_paper_152.pdf)
