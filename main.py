@@ -420,30 +420,85 @@ if context_mode:
             return "\n".join(strict_lines)
 
         wu_strict = _normalize_context_world_updates(wu)
-        # Pre-extract created locations and whether a move was issued from normalized text
-        created_locations: list[str] = []
-        try:
-            new_loc_blocks = re.findall(r"-\s*New location:\s*(.+)", wu_strict, flags=re.S)
-            for block in new_loc_blocks:
-                names = re.findall(r"<([^<>]+)>\s*description:\s*\"", block)
-                if not names:
-                    names = re.findall(r"([^,<][^,]*?)\s*description:\s*\"", block)
-                created_locations.extend([n.strip() for n in names if n])
-        except Exception:
-            pass
-        had_location_change = bool(re.search(r"-\s*Your location changed:\s*<([^<>]+)>", wu_strict))
         print("\n🛠️ Bootstrap from context 🛠️")
         print(wu_strict)
-        # Avoid auto-connecting placeholder and allow teleport during bootstrap
-        _old_auto = getattr(world, 'auto_connect_on_move', False)
-        _old_tp = getattr(world, 'allow_teleport_on_location_change', False)
-        try:
-            world.auto_connect_on_move = False
-            world.allow_teleport_on_location_change = True
-            world.parse_updates(wu_strict)
-        finally:
-            world.auto_connect_on_move = _old_auto
-            world.allow_teleport_on_location_change = _old_tp
+
+        # If the context bootstrap produced no actionable updates, fall back to
+        # an exploratory bootstrap seeded by the same context/starting_scenario.
+        use_fallback = not bool(wu_strict and wu_strict.strip())
+
+        created_locations: list[str] = []
+        had_location_change = False
+
+        if use_fallback:
+            try:
+                bootstrap_input = cfg.get("bootstrap_instruction") or (
+                    "Initialize the world from the starting scenario. "
+                    "Generate 2–3 connected locations, 1–2 items, and 1–2 NPCs. "
+                    "Connect locations bidirectionally via 'Connect locations'. "
+                    "Choose a starting location and emit 'Your location changed' to it. "
+                    "Use the STRICT update format with angle brackets <...> around all names."
+                )
+                prompt_update = prompt_world_update_exploratory(
+                    world.render_world(),
+                    bootstrap_input,
+                    source_material=context_text,
+                    starting_scenario=starting_scenario,
+                )
+                response_update = model.prompt_model(prompt_update)
+                # Pre-extract created locations and whether a move was issued
+                try:
+                    new_loc_blocks = re.findall(r"-\s*New location:\s*(.+)", response_update, flags=re.S)
+                    for block in new_loc_blocks:
+                        created_locations += [n.strip() for n in re.findall(r"<([^<>]+)>\s*description:\s*\"", block)]
+                except Exception:
+                    pass
+                had_location_change = bool(re.search(r"-\s*Your location changed:\s*<([^<>]+)>", response_update))
+
+                # Show fallback bootstrap succinctly
+                def _strip_for_bootstrap(text: str) -> str:
+                    cleaned = re.sub(r"#([^#]*?)#", "", text, flags=re.S)
+                    if cleaned == text:
+                        cleaned = "\n".join([ln for ln in text.splitlines() if not ln.strip().startswith('#')])
+                    return cleaned.strip()
+                print("\n🛠️ Bootstrap from starting scenario (fallback) 🛠️")
+                print(_strip_for_bootstrap(response_update))
+
+                # During bootstrap: avoid auto-connecting to Starting Point and allow teleport
+                _old_auto = getattr(world, 'auto_connect_on_move', False)
+                _old_tp = getattr(world, 'allow_teleport_on_location_change', False)
+                try:
+                    world.auto_connect_on_move = False
+                    world.allow_teleport_on_location_change = True
+                    world.parse_updates(response_update)
+                finally:
+                    world.auto_connect_on_move = _old_auto
+                    world.allow_teleport_on_location_change = _old_tp
+            except Exception as e2:
+                print(f"Warning: Fallback bootstrap failed: {e2}")
+        else:
+            # Pre-extract created locations and whether a move was issued from normalized text
+            try:
+                new_loc_blocks = re.findall(r"-\s*New location:\s*(.+)", wu_strict, flags=re.S)
+                for block in new_loc_blocks:
+                    names = re.findall(r"<([^<>]+)>\s*description:\s*\"", block)
+                    if not names:
+                        names = re.findall(r"([^,<][^,]*?)\s*description:\s*\"", block)
+                    created_locations.extend([n.strip() for n in names if n])
+            except Exception:
+                pass
+            had_location_change = bool(re.search(r"-\s*Your location changed:\s*<([^<>]+)>", wu_strict))
+            # Avoid auto-connecting placeholder and allow teleport during bootstrap
+            _old_auto = getattr(world, 'auto_connect_on_move', False)
+            _old_tp = getattr(world, 'allow_teleport_on_location_change', False)
+            try:
+                world.auto_connect_on_move = False
+                world.allow_teleport_on_location_change = True
+                world.parse_updates(wu_strict)
+            finally:
+                world.auto_connect_on_move = _old_auto
+                world.allow_teleport_on_location_change = _old_tp
+
         # If still at placeholder, force relocation to a created location
         try:
             if world.player.location and world.player.location.name == cfg.get("placeholder_name", "Starting Point"):
