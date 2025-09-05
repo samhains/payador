@@ -101,6 +101,27 @@ Saving and loading world state
   - `"autosave": true` (saves after each turn)
 - On startup, if the file exists, the app loads it automatically.
 
+World selection
+- Set the starting world via config or CLI:
+  - Config: `"world": "blank" | "1" | "2"` in `config.json` (default shown below)
+  - CLI: positional argument `python main.py blank` or `python main.py 2`
+
+Autonomous player-agent (optional)
+- Enable an agent that proposes the next action each turn:
+  - CLI: `python main.py --auto`
+  - Config: set `"auto": true` in `config.json`
+- Customize agent behavior via `player_agent` in `config.json`:
+  - `system_prompt`: persona and high-level guidance
+  - `history`: list of short primer lines to keep the agent in character
+  - `style_hint`: optional style guidance for action phrasing
+
+Player configuration (optional)
+- Configure the in-world player character via `player` in `config.json`:
+  - `name`, `descriptions`: applied always (including when loading saved state)
+  - `start_location`: applied on fresh/blank starts; created if missing when `create_location_if_missing` is true
+  - `inventory`: optional list of item names to place in inventory on fresh starts
+  - `inventory_descriptions`: optional map of item name -> description for items created from config
+
 In this mode, the model outputs extra world-building bullets (e.g., "New item", "New location", "New character", "Connect locations"). The engine parses these and extends the world so later turns can reference the newly created elements.
 
 ## 📄 Paper
@@ -119,3 +140,20 @@ If you use some part of this work in your research, please cite:
   year={2024}
 }
 ```
+### Context-driven bootstrap (one-file setup)
+
+Prefer a single `context.txt` file that captures vibe, constraints, and themes. When present and you start with `blank`, the app derives everything from it:
+
+- System prompt (for the optional player-agent)
+- Player name + descriptions
+- Starting scenario
+- Initial world updates (2–3 locations, 1–2 items, 1–2 NPCs, bidirectional connections, starting location, observed paths)
+
+Usage:
+
+```
+echo "Your world bible, themes, tone, and constraints..." > context.txt
+python main.py blank
+```
+
+The engine will print “Bootstrap from context” and apply the structured updates to seed the world.

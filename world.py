@@ -146,6 +146,13 @@ class World:
     # location directly even if unreachable (used during bootstrap).
     self.allow_teleport_on_location_change: bool = False
 
+    # Optional list of proposed (not yet realized) locations that the
+    # model can foreshadow. If the player later moves to one by name,
+    # the engine can materialize it on demand (not yet parsed here).
+    self.proposed_locations: dict[str, str] = {}
+    # Track visited locations for exploration strategies
+    self.visited: set[str] = set([self.player.location.name])
+
   # ===== Persistence: export/import state =====
   def to_dict(self) -> dict:
     """Serialize the current world to a JSON-serializable dict."""
@@ -367,6 +374,21 @@ class World:
 
     return world_description + '\n' + details
 
+  # ===== Helpers =====
+  def _detach_item(self, item: Item) -> None:
+    """Remove item from any holder/location in the world to avoid duplicates."""
+    # Player inventory
+    if item in self.player.inventory:
+      self.player.inventory = [i for i in self.player.inventory if i is not item]
+    # Other characters
+    for ch in self.characters.values():
+      if item in ch.inventory:
+        ch.inventory = [i for i in ch.inventory if i is not item]
+    # Locations
+    for loc in self.locations.values():
+      if item in loc.items:
+        loc.items = [i for i in loc.items if i is not item]
+
   def parse_updates (self, updates: str) -> None:
     """Does the changes in the world according to the output of the language model.
 
@@ -380,6 +402,8 @@ class World:
       self.parse_new_locations(updates)
       self.parse_new_characters(updates)
       self.parse_new_items(updates)
+      # Store diegetic exploration hooks for later materialization
+      self.parse_observed_paths(updates)
       self.parse_connect_locations(updates)
     except Exception as e:
       print(e)
@@ -388,6 +412,27 @@ class World:
     self.parse_moved_objects(updates)
     self.parse_blocked_passages(updates)
     self.parse_location_change(updates)
+
+  def parse_observed_paths(self, updates: str) -> None:
+    """Parse diegetic exploration hooks without creating locations yet.
+
+    Expected format (comma-separated entries allowed):
+    - Observed paths: <Name> description: "short desc", <Other> description: "..."
+    Also supports unbracketed names as a fallback.
+    """
+    matches = re.findall(r"-\s*Observed paths:\s*(.+)", updates)
+    if not matches:
+      return
+    for block in matches:
+      entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"", block)
+      if not entries:
+        entries = re.findall(r"([^,<][^,]*?)\s*description:\s*\"([^\"]*)\"", block)
+      for name, desc in entries:
+        n = name.strip().strip('<>')
+        if n in self.locations:
+          # Already exists; no need to store as a lead
+          continue
+        self.proposed_locations[n] = desc.strip()
 
   # ===== World-building extensions =====
   def _ensure_location(self, name: str, description: str | None = None) -> 'Location':
@@ -419,75 +464,89 @@ class World:
     matches = re.findall(r"-\s*New location:\s*(.+)", updates)
     if not matches:
       return
-    # Allow comma-separated entries on the same line
-    entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"", matches[0])
-    for name, desc in entries:
-      try:
-        self._ensure_location(name.strip(), desc.strip())
-      except Exception as e:
-        print(e)
+    for block in matches:
+      # Prefer strict bracketed format, but fall back to unbracketed
+      entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"", block)
+      if not entries:
+        entries = re.findall(r"([^,<][^,]*?)\s*description:\s*\"([^\"]*)\"", block)
+      for name, desc in entries:
+        try:
+          self._ensure_location(name.strip().strip('<>'), desc.strip())
+        except Exception as e:
+          print(e)
 
   def parse_new_characters(self, updates: str) -> None:
     matches = re.findall(r"-\s*New character:\s*(.+)", updates)
     if not matches:
       return
-    entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"\s*location:\s*<([^<>]+)>", matches[0])
-    for name, desc, loc in entries:
-      try:
-        self._ensure_character(name.strip(), desc.strip(), loc.strip())
-      except Exception as e:
-        print(e)
+    for block in matches:
+      entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"\s*location:\s*<([^<>]+)>", block)
+      if not entries:
+        entries = re.findall(r"([^,<][^,]*?)\s*description:\s*\"([^\"]*)\"\s*location:\s*<?([^<>\n,]+)>?", block)
+      for name, desc, loc in entries:
+        try:
+          self._ensure_character(name.strip().strip('<>'), desc.strip(), loc.strip().strip('<>'))
+        except Exception as e:
+          print(e)
 
   def parse_new_items(self, updates: str) -> None:
     matches = re.findall(r"-\s*New item:\s*(.+)", updates)
     if not matches:
       return
-    entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"\s*location:\s*<([^<>]+)>", matches[0])
-    for name, desc, dst in entries:
-      try:
-        item = self._ensure_item(name.strip(), desc.strip())
-        dst = dst.strip()
-        # Place item
-        if dst == 'Inventory':
-          try:
-            self.player.save_item(item, self.player.location)
-          except Exception:
-            # If already in inventory, ignore
-            pass
-        elif dst in self.locations:
-          loc = self.locations[dst]
-          if item not in loc.items:
-            loc.items.append(item)
-        elif dst in self.characters:
-          ch = self.characters[dst]
-          if item not in ch.inventory:
-            ch.inventory.append(item)
-        else:
-          # Create location and place there
-          loc = self._ensure_location(dst)
-          if item not in loc.items:
-            loc.items.append(item)
-      except Exception as e:
-        print(e)
+    for block in matches:
+      entries = re.findall(r"<([^<>]+)>\s*description:\s*\"([^\"]*)\"\s*location:\s*<([^<>]+)>", block)
+      if not entries:
+        entries = re.findall(r"([^,<][^,]*?)\s*description:\s*\"([^\"]*)\"\s*location:\s*<?([^<>\n,]+)>?", block)
+      for name, desc, dst in entries:
+        try:
+          item = self._ensure_item(name.strip().strip('<>'), desc.strip())
+          dst = dst.strip().strip('<>')
+          # Always detach the item from any prior container before placing
+          self._detach_item(item)
+          # Place item
+          if dst == 'Inventory':
+            # Respect gettable flag
+            if item.gettable and item not in self.player.inventory:
+              self.player.inventory.append(item)
+          elif dst in self.locations:
+            loc = self.locations[dst]
+            if item not in loc.items:
+              loc.items.append(item)
+          elif dst in self.characters:
+            ch = self.characters[dst]
+            if item not in ch.inventory:
+              ch.inventory.append(item)
+          else:
+            # Create location and place there
+            loc = self._ensure_location(dst)
+            if item not in loc.items:
+              loc.items.append(item)
+        except Exception as e:
+          print(e)
 
   def parse_connect_locations(self, updates: str) -> None:
     matches = re.findall(r"-\s*Connect locations:\s*(.+)", updates)
     if not matches:
-      return
-    # Extract explicit pairs like <A> <-> <B>, <C> <-> <D>
-    all_text = matches[0]
-    pairs = re.findall(r"<([^<>]+)>\s*<->\s*<([^<>]+)>", all_text)
-    if not pairs:
       return
     def connect(a: 'Location', b: 'Location'):
       if b not in a.connecting_locations:
         a.connecting_locations.append(b)
       if a not in b.connecting_locations:
         b.connecting_locations.append(a)
-    for a_name, b_name in pairs:
-      a = self._ensure_location(a_name.strip())
-      b = self._ensure_location(b_name.strip())
-      connect(a, b)
+    for block in matches:
+      # Bracketed pairs
+      pairs = re.findall(r"<([^<>]+)>\s*<->\s*<([^<>]+)>", block)
+      for a_name, b_name in pairs:
+        a = self._ensure_location(a_name.strip())
+        b = self._ensure_location(b_name.strip())
+        connect(a, b)
+      # Fallback: unbracketed pairs
+      if not pairs:
+        pairs2 = re.findall(r"([^,<><\n]+?)\s*<->\s*([^,<><\n]+)", block)
+        for a_name, b_name in pairs2:
+          a = self._ensure_location(a_name.strip().strip(','))
+          b = self._ensure_location(b_name.strip().strip(','))
+          connect(a, b)
 
   def parse_moved_objects (self, updates: str) -> None:
     """Parse the output of the language model to update the position of objects.
@@ -507,6 +566,30 @@ class World:
     for parsed_object in parsed_objects_split:
       pair = re.findall(r"<([^<>]*?)>.*?<([^<>]*?)>", parsed_object)
       try:
+        # Special-case: some models express movement as moving <Player>
+        if pair and pair[0][0] == 'Player':
+          target_name = pair[0][1]
+          try:
+            target = self.locations[target_name]
+          except Exception:
+            target = self._ensure_location(target_name)
+          # Try to move; fallback to teleport/auto-connect
+          try:
+            self.player.move(target)
+            self.visited.add(self.player.location.name)
+          except Exception:
+            current = self.player.location
+            if self.allow_teleport_on_location_change:
+              self.player.location = target
+              self.visited.add(self.player.location.name)
+            elif self.auto_connect_on_move and target not in current.connecting_locations:
+              current.connecting_locations.append(target)
+              if current not in target.connecting_locations:
+                target.connecting_locations.append(current)
+              self.player.location = target
+              self.visited.add(self.player.location.name)
+          continue
+
         world_item = self.items[pair[0][0]]
         
         if pair[0][1] == 'Inventory': #(save_item case)
@@ -545,17 +628,35 @@ class World:
     if line.lower().startswith('none'):
       return
     parsed_location_change_split = re.findall(r"<([^<>]*?)>", line)
-    if not parsed_location_change_split:
+    target_name = None
+    if parsed_location_change_split:
+      target_name = parsed_location_change_split[0]
+    else:
+      # Fallback: unbracketed name after the colon
+      m = re.search(r"Your location changed:\s*([^#\n]+)", line)
+      if m:
+        target_name = m.group(1).strip().strip(',').strip()
+    if not target_name:
       return
     try:
-      self.player.move(self.locations[parsed_location_change_split[0]])
+      self.player.move(self.locations[target_name])
+      self.visited.add(self.player.location.name)
     except Exception as e:
-      # If movement fails due to unreachable, optionally teleport or auto-connect
+      # If movement fails due to unreachable, optionally materialize hooks/teleport/connect
       try:
-        target = self.locations[parsed_location_change_split[0]]
+        target = self.locations.get(target_name)
+        # Materialize from observed paths if needed
+        if target is None and target_name in self.proposed_locations:
+          target = self._ensure_location(target_name, self.proposed_locations.get(target_name))
+          # Once materialized, remove from proposals
+          try:
+            del self.proposed_locations[target_name]
+          except Exception:
+            pass
         current = self.player.location
         if self.allow_teleport_on_location_change:
           self.player.location = target
+          self.visited.add(self.player.location.name)
         elif self.auto_connect_on_move and target not in current.connecting_locations:
           # Bidirectional connection
           current.connecting_locations.append(target)
@@ -563,6 +664,7 @@ class World:
             target.connecting_locations.append(current)
           # Move after connecting
           self.player.location = target
+          self.visited.add(self.player.location.name)
         else:
           print(e)
       except Exception as e2:

@@ -54,6 +54,7 @@ The model is asked to output updates using the following bullet structure. Multi
 - `Moved object: <object> now is in <new_location>`
 - `Blocked passages now available: <now_reachable_location>`
 - `Your location changed: <new_location>`
+- `Observed paths: <Diegetic lead name> description: "short diegetic hint", ...` (optional hooks; not immediately created)
 - Final single-line narration as: `#<short sentence>#`
 
 Notes:
@@ -75,11 +76,15 @@ New parsing methods:
 - `parse_new_characters`: parses `New character:` lines and adds characters in a location.
 - `parse_new_items`: parses `New item:` lines and places the item in a `Location`, `Character`, or `Inventory`.
 - `parse_connect_locations`: parses `Connect locations:` (pairs) and links them bidirectionally.
+- `parse_observed_paths`: parses `Observed paths:` lines and stores diegetic leads that are materialized only if the player chooses to go there.
 
 Then the original methods run:
 - `parse_moved_objects`
 - `parse_blocked_passages`
 - `parse_location_change`
+
+Hook materialization:
+- If `Your location changed:` references an unknown place and it matches an `Observed paths` lead, the engine creates that location (using the stored description), connects it to the current location (if auto-connect is on), and moves the player.
 
 Error handling:
 - Parsers are defensive; on malformed fragments they print the exception and proceed.
@@ -92,6 +97,7 @@ Error handling:
 - New character: <Dockmaster Rhea> description: "A gruff official with a cybernetic eye" location: <Spaceport Office>
 - New item: <Ancient Coin> description: "Tarnished bronze disc with strange sigils" location: <Inventory>
 - Connect locations: <Landing Pad> <-> <Spaceport Office>
+- Observed paths: <Maintenance Bay Theta> description: "Muffled clanks echo beyond a hanging membrane", <Customs Archive> description: "A slit in the wall breathes out paper-dry air"
 - Moved object: <Flashlight> now is in <Inventory>
 - Blocked passages now available: <Maintenance Tunnel>
 - Your location changed: <Spaceport Office>
@@ -120,3 +126,19 @@ Error handling:
 - Blocked-passage creation: Currently supports unblocking; adding a `Block passage:` creation format (with obstacles) would complete the loop.
 - Validation: Could add a minimal schema check and corrective hinting if the model’s output deviates from format.
 - Safety: Keep `.env` and `API_key` out of version control (already ignored).
+### Context-first (single file)
+
+Place a `context.txt` at the project root with themes, tone, and constraints. Starting with `blank` and explore enabled, the app will ask the model to derive:
+
+- System prompt for a curious player-agent
+- Player persona (name, short descriptions)
+- Starting scenario (1–2 sentences)
+- Initial world updates (2–3 locations, 1–2 items, 1–2 NPCs, bidirectional connects, a starting move, and observed paths)
+
+Run:
+
+```
+python main.py blank
+```
+
+You’ll see “Bootstrap from context” and the structured updates before the first turn.
