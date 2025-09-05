@@ -51,6 +51,33 @@ if cfg_path and os.path.exists(cfg_path):
         print(f"Warning: Could not load config '{cfg_path}': {e}")
         cfg = {}
 
+def _prune_placeholder_location(world, *, placeholder_name: str = "Starting Point") -> None:
+    try:
+        sp = world.locations.get(placeholder_name)
+        if not sp or world.player.location is sp:
+            return
+        # Move any NPCs off the placeholder to the player's current location
+        for ch in list(world.characters.values()):
+            if ch.location is sp:
+                ch.location = world.player.location
+        # Remove connections and blocked references to the placeholder
+        for loc in list(world.locations.values()):
+            if sp in getattr(loc, 'connecting_locations', []):
+                loc.connecting_locations = [l for l in loc.connecting_locations if l is not sp]
+            if placeholder_name in getattr(loc, 'blocked_locations', {}):
+                try:
+                    del loc.blocked_locations[placeholder_name]
+                except Exception:
+                    pass
+        # Finally remove the placeholder location from the world registry
+        try:
+            del world.locations[placeholder_name]
+        except Exception:
+            pass
+    except Exception:
+        # Non-fatal; pruning is best-effort
+        pass
+
 # Instantiate the world
 world_id = args.world
 world = example_worlds.get_world(world_id)
@@ -116,6 +143,9 @@ if world_state_path and os.path.exists(world_state_path):
                 saved = json.load(f)
             world.load_dict(saved)
             state_loaded = True
+            # Optional pruning of placeholder location on load
+            if bool(cfg.get("prune_placeholder_on_load", True)):
+                _prune_placeholder_location(world, placeholder_name=cfg.get("placeholder_name", "Starting Point"))
             print(f"Loaded world state from {world_state_path}")
         except Exception as e:
             print(f"Warning: Could not load world state from {world_state_path}: {e}")
@@ -168,6 +198,9 @@ if exploratory_mode and starting_scenario and bootstrap_on_start and not state_l
         finally:
             world.auto_connect_on_move = _old_auto
             world.allow_teleport_on_location_change = _old_tp
+        # Remove the placeholder location now that we have a real starting area
+        if bool(cfg.get("prune_placeholder_after_bootstrap", True)):
+            _prune_placeholder_location(world, placeholder_name=cfg.get("placeholder_name", "Starting Point"))
     except Exception as e:
         print(f"Warning: Bootstrap failed: {e}")
 
