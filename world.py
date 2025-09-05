@@ -138,6 +138,137 @@ class World:
     self.player = player
     """a character for the player"""
 
+    # When True, allow auto-connecting the current location to a target
+    # location if a movement is requested but no path exists (useful in
+    # exploratory world-building mode to reduce friction).
+    self.auto_connect_on_move: bool = False
+    # When True, allow location change to set the player's
+    # location directly even if unreachable (used during bootstrap).
+    self.allow_teleport_on_location_change: bool = False
+
+  # ===== Persistence: export/import state =====
+  def to_dict(self) -> dict:
+    """Serialize the current world to a JSON-serializable dict."""
+    def item_dict(i: Item) -> dict:
+      return {
+        "descriptions": i.descriptions,
+        "gettable": bool(i.gettable),
+      }
+
+    def location_dict(loc: Location) -> dict:
+      blocked_list = []
+      for name, (target, obstacle, symmetric) in loc.blocked_locations.items():
+        blocked_list.append({
+          "location": target.name,
+          "obstacle": obstacle.name if isinstance(obstacle, Item) else str(obstacle),
+          "symmetric": bool(symmetric),
+        })
+      return {
+        "descriptions": loc.descriptions,
+        "items": [i.name for i in loc.items],
+        "connecting_locations": [l.name for l in loc.connecting_locations],
+        "blocked": blocked_list,
+      }
+
+    def character_dict(c: Character) -> dict:
+      return {
+        "descriptions": c.descriptions,
+        "location": c.location.name,
+        "inventory": [i.name for i in c.inventory],
+      }
+
+    data = {
+      "items": {name: item_dict(i) for name, i in self.items.items()},
+      "locations": {name: location_dict(l) for name, l in self.locations.items()},
+      "characters": {name: character_dict(c) for name, c in self.characters.items()},
+      "player": {
+        "name": self.player.name,
+        "descriptions": self.player.descriptions,
+        "location": self.player.location.name,
+        "inventory": [i.name for i in self.player.inventory],
+      },
+    }
+    return data
+
+  def load_dict(self, data: dict) -> None:
+    """Replace current world state with the one provided in a dict.
+
+    Expected schema matches to_dict().
+    """
+    # Reset containers
+    self.items = {}
+    self.locations = {}
+    self.characters = {}
+
+    # Items first
+    items_data = data.get("items", {})
+    for name, meta in items_data.items():
+      descs = meta.get("descriptions", [])
+      gettable = bool(meta.get("gettable", True))
+      self.items[name] = Item(name, descs, gettable=gettable)
+
+    # Locations next (without wiring)
+    locs_data = data.get("locations", {})
+    for name, meta in locs_data.items():
+      descs = meta.get("descriptions", [])
+      items_here = [self.items[i] for i in meta.get("items", []) if i in self.items]
+      self.locations[name] = Location(name, descs, items=items_here)
+
+    # Connect locations (open paths)
+    for name, meta in locs_data.items():
+      loc = self.locations[name]
+      for target_name in meta.get("connecting_locations", []):
+        if target_name in self.locations:
+          target = self.locations[target_name]
+          if target not in loc.connecting_locations:
+            loc.connecting_locations.append(target)
+
+    # Blocked passages
+    for name, meta in locs_data.items():
+      loc = self.locations[name]
+      for blk in meta.get("blocked", []) or []:
+        tname = blk.get("location")
+        oname = blk.get("obstacle")
+        symmetric = bool(blk.get("symmetric", True))
+        if not tname or tname not in self.locations or not oname or oname not in self.items:
+          continue
+        target = self.locations[tname]
+        obstacle = self.items[oname]
+        if target not in loc.connecting_locations:
+          loc.connecting_locations.append(target)
+        try:
+          loc.block_passage(target, obstacle, symmetric=symmetric)
+        except Exception:
+          # If already blocked or structure differs, set directly
+          loc.blocked_locations[target.name] = (target, obstacle, symmetric)
+          if target in loc.connecting_locations:
+            loc.connecting_locations = [x for x in loc.connecting_locations if x is not target]
+
+    # Characters (NPCs)
+    chars_data = data.get("characters", {})
+    for name, meta in chars_data.items():
+      location_name = meta.get("location")
+      if location_name not in self.locations:
+        continue
+      loc = self.locations[location_name]
+      descs = meta.get("descriptions", [])
+      inv = [self.items[i] for i in meta.get("inventory", []) if i in self.items]
+      ch = Character(name, descs, location=loc, inventory=inv)
+      self.add_character(ch)
+
+    # Player
+    p = data.get("player", {})
+    pname = p.get("name", "Player")
+    pdescs = p.get("descriptions", [])
+    ploc_name = p.get("location")
+    ploc = self.locations.get(ploc_name, next(iter(self.locations.values())) if self.locations else None)
+    pinv = [self.items[i] for i in p.get("inventory", []) if i in self.items]
+    if ploc is None:
+      # Fallback minimal location
+      ploc = Location("Nowhere", ["An undefined place"]) 
+      self.add_location(ploc)
+    self.player = Character(pname, pdescs, location=ploc, inventory=pinv)
+
   def add_location (self,location: Location) -> None:
     """Add a location to the world."""
     if location.name in self.locations:
@@ -343,21 +474,19 @@ class World:
     matches = re.findall(r"-\s*Connect locations:\s*(.+)", updates)
     if not matches:
       return
-    # Extract ordered sequence of <...> tokens; connect pairs bidirectionally
-    tokens = re.findall(r"<([^<>]+)>", matches[0])
-    if len(tokens) < 2:
+    # Extract explicit pairs like <A> <-> <B>, <C> <-> <D>
+    all_text = matches[0]
+    pairs = re.findall(r"<([^<>]+)>\s*<->\s*<([^<>]+)>", all_text)
+    if not pairs:
       return
     def connect(a: 'Location', b: 'Location'):
       if b not in a.connecting_locations:
         a.connecting_locations.append(b)
       if a not in b.connecting_locations:
         b.connecting_locations.append(a)
-    # Iterate in pairs: (0,1), (2,3), ...
-    for i in range(0, len(tokens) - 1, 2):
-      a_name = tokens[i].strip()
-      b_name = tokens[i + 1].strip()
-      a = self._ensure_location(a_name)
-      b = self._ensure_location(b_name)
+    for a_name, b_name in pairs:
+      a = self._ensure_location(a_name.strip())
+      b = self._ensure_location(b_name.strip())
       connect(a, b)
 
   def parse_moved_objects (self, updates: str) -> None:
@@ -368,44 +497,73 @@ class World:
       - the player gave an item to other character
       - the player dropped an item.
     """
-    parsed_objects = re.findall(r".*Moved object:\s*(.+)",updates)
-    if 'None' not in parsed_objects:
-      parsed_objects_split = re.findall(r"<[^<>]*?>.*?<[^<>]*?>",parsed_objects[0])
-      for parsed_object in parsed_objects_split:
-        pair = re.findall(r"<([^<>]*?)>.*?<([^<>]*?)>",parsed_object)
-        try:
-          world_item = self.items[pair[0][0]]
-          
-          if pair[0][1] == 'Inventory': #(save_item case)
-            item_location = [character for character in list(self.characters.values()) if world_item in character.inventory]
-            item_location += [location for location in list(self.locations.values()) if world_item in location.items]
+    parsed_objects = re.findall(r"-\s*Moved object:\s*(.+)", updates)
+    if not parsed_objects:
+      return
+    line = parsed_objects[0].strip()
+    if line.lower().startswith('none'):
+      return
+    parsed_objects_split = re.findall(r"<[^<>]*?>.*?<[^<>]*?>", line)
+    for parsed_object in parsed_objects_split:
+      pair = re.findall(r"<([^<>]*?)>.*?<([^<>]*?)>", parsed_object)
+      try:
+        world_item = self.items[pair[0][0]]
+        
+        if pair[0][1] == 'Inventory': #(save_item case)
+          item_location = [character for character in list(self.characters.values()) if world_item in character.inventory]
+          item_location += [location for location in list(self.locations.values()) if world_item in location.items]
+          if item_location:
             self.player.save_item(world_item, item_location[0])
-
-          elif pair[0][1] in self.characters: #(give_item case)
-            self.player.give_item(self.characters[pair[0][1]], world_item)
-          
-          else: #(drop_item case)
-            self.player.drop_item(world_item)
-        except Exception as e:
-          print(e)
+        elif pair[0][1] in self.characters: #(give_item case)
+          self.player.give_item(self.characters[pair[0][1]], world_item)
+        else: #(drop_item case)
+          self.player.drop_item(world_item)
+      except Exception as e:
+        print(e)
 
   def parse_blocked_passages (self, updates: str) -> None:
     """Parse the output of the language model to update the reachable locations."""
-    parsed_blocked_passages = re.findall(r".*Blocked passages now available:\s*(.+)",updates)
-    if 'None' not in parsed_blocked_passages:
-      parsed_blocked_passages_split = re.findall(r"<([^<>]*?)>",parsed_blocked_passages[0])
-      for parsed_passage in parsed_blocked_passages_split:
-        try:
-          self.locations[self.player.location.name].unblock_passage(self.locations[parsed_passage])
-        except Exception as e:
-          print (e)
+    parsed_blocked_passages = re.findall(r"-\s*Blocked passages now available:\s*(.+)", updates)
+    if not parsed_blocked_passages:
+      return
+    line = parsed_blocked_passages[0].strip()
+    if line.lower().startswith('none'):
+      return
+    parsed_blocked_passages_split = re.findall(r"<([^<>]*?)>", line)
+    for parsed_passage in parsed_blocked_passages_split:
+      try:
+        self.locations[self.player.location.name].unblock_passage(self.locations[parsed_passage])
+      except Exception as e:
+        print (e)
 
   def parse_location_change (self, updates: str) -> None:
     """Parse the output of the language model to update the position of the player."""
-    parsed_location_change = re.findall(r".*Your location changed: (.+)",updates)
-    if "None" not in parsed_location_change:
-      parsed_location_change_split = re.findall(r"<([^<>]*?)>",parsed_location_change[0])
+    parsed_location_change = re.findall(r"-\s*Your location changed:\s*(.+)", updates)
+    if not parsed_location_change:
+      return
+    line = parsed_location_change[0].strip()
+    if line.lower().startswith('none'):
+      return
+    parsed_location_change_split = re.findall(r"<([^<>]*?)>", line)
+    if not parsed_location_change_split:
+      return
+    try:
+      self.player.move(self.locations[parsed_location_change_split[0]])
+    except Exception as e:
+      # If movement fails due to unreachable, optionally teleport or auto-connect
       try:
-        self.player.move(self.locations[parsed_location_change_split[0]])
-      except Exception as e:
-        print(e)
+        target = self.locations[parsed_location_change_split[0]]
+        current = self.player.location
+        if self.allow_teleport_on_location_change:
+          self.player.location = target
+        elif self.auto_connect_on_move and target not in current.connecting_locations:
+          # Bidirectional connection
+          current.connecting_locations.append(target)
+          if current not in target.connecting_locations:
+            target.connecting_locations.append(current)
+          # Move after connecting
+          self.player.location = target
+        else:
+          print(e)
+      except Exception as e2:
+        print(e2)

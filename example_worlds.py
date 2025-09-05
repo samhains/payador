@@ -4,6 +4,8 @@ from world import Character, Item, Location, World
 
 
 def get_world(arg: str) -> World:
+    if arg.lower() in ('blank', '0', 'empty'):
+        return get_world_blank()
     if arg=='2':
         return get_world_2()
     return get_world_1()
@@ -97,4 +99,17 @@ def get_world_2() -> World:
                          item_6, item_7,item_8, item_9, item_10])
     the_world.add_character(npc)
 
+    return the_world
+
+def get_world_blank() -> World:
+    """A minimal blank world preset intended for exploratory world-building.
+
+    Contains a single neutral location and a generic protagonist, with no items
+    and no connections. Use exploratory mode to invent and connect new entities.
+    """
+    start = Location("Starting Point", ["A neutral starting area awaiting definition"])  
+    player = Character("Protagonist", ["An undefined adventurer"], location=start)
+
+    the_world = World(player)
+    the_world.add_location(start)
     return the_world

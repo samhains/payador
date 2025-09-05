@@ -3,3 +3,4 @@ __pycache__/
 .env
 API_key
 source_material.txt
+world_state.json

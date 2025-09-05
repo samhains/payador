@@ -74,15 +74,32 @@ python main.py
 
 ### Exploratory world-building mode (optional)
 
-Enable a mode where the model can invent new locations, items, and characters and persist them to the world state via structured updates:
+Enable a mode where the model can invent new locations, items, and characters and persist them to the world state via structured updates.
 
 ```
-export EXPLORATORY_MODE=1
-# Optional: provide background text and a starting scenario
-echo "A dusty spaceport on the desert planet Aridia..." > source_material.txt
-export STARTING_SCENARIO="You arrive at sunset, heat shimmering on the landing pads."
+# Default config `config.json` enables exploratory mode
 python main.py
+
+# Optional: if you add a background text file, it will be picked up automatically
+echo "A dusty spaceport on the desert planet Aridia..." > source_material.txt
+python main.py --explore
 ```
+
+Notes:
+- A default `config.json` is included and auto-loaded; it enables exploratory mode, defines a starting scenario, and configures saving.
+- If `source_material.txt` exists in the project root, it is used automatically as background text.
+- You can still pass a custom config with `--config` or override via `--explore`.
+
+Blank world preset
+- Start from an empty canvas designed for exploratory building:
+  - `python main.py blank`
+  - If `starting_scenario` is set in `config.json`, the app bootstraps an initial set of locations/characters/items from it before the first turn. Saved state is skipped when starting with `blank`.
+
+Saving and loading world state
+- Configure a path in `config.json` to persist the evolving world across runs:
+  - `"world_state_path": "world_state.json"`
+  - `"autosave": true` (saves after each turn)
+- On startup, if the file exists, the app loads it automatically.
 
 In this mode, the model outputs extra world-building bullets (e.g., "New item", "New location", "New character", "Connect locations"). The engine parses these and extends the world so later turns can reference the newly created elements.
 

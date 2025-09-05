@@ -1,0 +1,13 @@
+{
+  // Enable exploratory world-building prompt and parsing
+  "explore": true,
+
+  // Optional opening seed used in the first turns
+  "starting_scenario": "You arrive at sunset, within a jon rafman/cronenberg inspired environment.",
+
+  // If this file exists, the app loads it at startup; it will autosave after each turn
+  "world_state_path": "world_state.json",
+
+  // Set to true to save automatically after each turn (defaults to true when world_state_path is set)
+  "autosave": true
+}

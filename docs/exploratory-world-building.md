@@ -13,19 +13,35 @@ This document describes the changes introduced on branch `feat/world-building-to
 
 ## How to Enable
 
+Default flow (no config changes needed):
+
 ```
-export EXPLORATORY_MODE=1
+# Exploratory mode is enabled by default in config.json
+python main.py
+
 # Optional background text used as a creative seed:
 echo "A dusty spaceport on the desert planet Aridia..." > source_material.txt
-# Optional starting scenario seed:
-export STARTING_SCENARIO="You arrive at sunset, heat shimmering on the landing pads."
-python main.py
+python main.py --explore
 ```
 
-Environment variables and files:
-- `EXPLORATORY_MODE=1` enables this mode.
-- `SOURCE_MATERIAL` (path): defaults to `source_material.txt` if present.
-- `STARTING_SCENARIO` (string): short seed for the first turns.
+Notes:
+- A default `config.json` is bundled and auto-loaded with exploratory mode on and a starting scenario.
+- If `source_material.txt` exists in the project root, it is used automatically as background material.
+- Advanced: You can pass a different config via `--config /path/to.json` when you want to customize.
+
+Blank world preset
+- To start from an empty canvas, use the blank preset designed for exploratory creation:
+  - `python main.py blank`
+
+Persistence
+- To keep the co-built world across sessions, `config.json` includes:
+  - `"world_state_path": "world_state.json"` — where the world is saved/loaded.
+  - `"autosave": true` — saves after each turn.
+- On startup, if the file exists, it is loaded automatically and becomes the current session’s world.
+
+Bootstrapping from starting scenario
+- If you run `python main.py blank` with a `starting_scenario` in `config.json`, the app auto‑asks the model to create the initial locations, characters, and items from that scenario using the strict format and updates the world before the first prompt.
+- Auto‑load is skipped for the `blank` preset by default so you get a fresh world from your scenario.
 
 ## Output Format (Strict)
 
@@ -104,4 +120,3 @@ Error handling:
 - Blocked-passage creation: Currently supports unblocking; adding a `Block passage:` creation format (with obstacles) would complete the loop.
 - Validation: Could add a minimal schema check and corrective hinting if the model’s output deviates from format.
 - Safety: Keep `.env` and `API_key` out of version control (already ignored).
-
